@@ -1,0 +1,12 @@
+{
+  "minModelsForScore": 1,
+  "models": [
+    {
+      "id": "saradubey6/ai-image-detector",
+      "task": "space",
+      "api": "/predict",
+      "enabled": true,
+      "weight": 1.0
+    }
+  ]
+}
