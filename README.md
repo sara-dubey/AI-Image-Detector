@@ -149,7 +149,7 @@ This project intentionally explores production patterns (async queues, caching, 
 
 **Backend (Render)**
 - Express API gateway orchestrates HF Spaces + local media pipelines  
-- Secrets (HF tokens) must be stored in platform environment variables (never in Git)
+- Secrets (HF tokens) must be stored in platform environment variables 
 
 
 ---
