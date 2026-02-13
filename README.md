@@ -10,34 +10,23 @@ A fully functional AI-integrated web application built to showcase engineering s
 
 ## What this app does
 
-Rivel Studio provides four production-style tools:
+A small suite of production-style tools:
 
-- **Detect (AI vs Real)** — Upload an image and get an AI probability + label.
-- **Generate (Prompt → Image)** — Job-based image generation with polling/progress UI (handles HF cold starts).
-- **Resize** — Resize by dimensions / constraints.
-- **Convert** — Images ↔ PDF (PDF → Images returns ZIP).
+- **Detect (AI vs Real)** — upload an image and receive AI probability + label  
+- **Generate (Prompt → Image)** — job-based generation with progress UI (handles HF cold starts)  
+- **Resize** — resize by dimensions / constraints  
+- **Convert** — images ↔ PDF (PDF → images returned as ZIP)
 
 ---
 
-## Why this project is “AI + Distributed Systems” (not just an API call)
+## Why this project is “AI + Distributed Systems”
 
-This system uses **Hugging Face Spaces** (free tier) for inference. Free Spaces can:
-- **sleep / cold start** (can take minutes to wake),
-- run **queued inference** (variable latency),
-- fail transiently due to load.
-
-To deliver reliable UX anyway, the backend acts as a lightweight **control plane**:
-- API gateway (Express)
-- Rate limiting
-- Caching
-- Job queue + worker loop for long-running generation
-- Polling endpoints so the UI can show progress and avoid request timeouts
+This system uses **Hugging Face Spaces** (free tier) for inference, where cold starts and queued execution are common.  
+To keep UX reliable under real latency constraints, the backend acts as a lightweight **control plane** with caching, rate limiting, and async job orchestration.
 
 ---
 
 ## Architecture
-
-### High-level system diagram
 
 ```mermaid
 flowchart LR
@@ -60,151 +49,116 @@ flowchart LR
 
 ## Core request flows
 
-### 1) Detect flow (Gradio queue + SSE)
+### Detect (Gradio queue + SSE)
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant UI as Netlify UI (DetectPage)
-  participant API as Render Express (/api/detect)
-  participant HF as HF Space (ai-image-detector)
-  participant G as Gradio API (/gradio_api)
+  participant UI as Netlify UI
+  participant API as Render API (/api/detect)
+  participant HF as HF Space (detect)
+  participant G as Gradio API
 
-  UI->>API: POST /api/detect (multipart, field="image")
+  UI->>API: POST /api/detect (multipart image)
   API->>HF: GET /config (discover api_prefix)
-  HF-->>API: {api_prefix} (default: /gradio_api)
-
-  API->>G: POST /call/predict (data: [FileData])
-  G-->>API: {event_id}
-
-  API->>G: GET /call/predict/:event_id (SSE stream)
-  G-->>API: final data: { ...json output... }
-
-  API-->>UI: {ok:true, label, ai_probability, raw}
+  API->>G: POST /call/predict (queued)
+  G-->>API: event_id
+  API->>G: GET /call/predict/:event_id (SSE)
+  G-->>API: final JSON output
+  API-->>UI: result JSON (ai_probability + label)
 ```
 
----
-
-### 2) Generate flow (Job queue + polling)
+### Generate (async jobs + polling)
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant UI as Netlify UI (GeneratePage)
-  participant API as Render Express (/api)
-  participant RL as rateLimit middleware
-  participant JS as JobStore (in-memory)
+  participant UI as Netlify UI
+  participant API as Render API
+  participant JS as JobStore
   participant W as QueueWorker
-  participant HF as HF Space (prompt-to-image)
+  participant HF as HF Space (generate)
 
-  UI->>API: POST /api/generate {prompt, steps, guidance, seed, negative_prompt}
-  API->>RL: rateLimit check
-  RL-->>API: ok
-  API->>JS: createJob() + enqueue
-  API-->>UI: {jobId, status, queuePosition, etaMs}
+  UI->>API: POST /api/generate (prompt params)
+  API->>JS: createJob + enqueue
+  API-->>UI: jobId + etaMs
 
-  loop Poll every 1–5s
+  loop Poll
     UI->>API: GET /api/generate/:jobId
     API->>JS: getJob(jobId)
-    JS-->>API: {status, elapsedMs, etaMs, result?}
-    API-->>UI: {status, elapsedMs, etaMs, result?}
+    API-->>UI: status + progress fields + result?
   end
 
   W->>JS: popNextJob()
-  W->>HF: call generate endpoint
+  W->>HF: run generation
   HF-->>W: imageUrl OR error
-  W->>JS: markDone(jobId, result) / markError(jobId, error)
+  W->>JS: markDone / markError
 ```
 
 ---
 
-## Product/UX choices (built for real constraints)
+## Roadmap (condensed)
 
-- **Progress UX** for long-running generation (polling + status card)
-- **Explicit warning** that HF free models can sleep and wake slowly
-- **Rate limiting** to protect free inference backends from abuse
-- **Caching** to reduce repeated calls and control latency/cost
-- **Clear error surfacing** (no silent failures)
+**Phase 1 (Next ~3 months): Reliability**
+- Redis-backed job queue (persistence + horizontal scaling)
+- WebSocket progress updates (replace polling)
+- Structured logging + request tracing
+- Retries with exponential backoff
+- Circuit breaker for HF failures
+- Deep health checks (dependency-aware)
 
----
+**Phase 2 (3–6 months): Features**
+- Batch processing (multi-file requests)
+- Stronger model options (SDXL / ControlNet / Img2Img workflows)
+- Optional user accounts (history + quotas)
+- Next.js migration (SSR + SEO)
+- Public developer API (API keys + rate limits)
 
-## Tech stack
-
-**Frontend**
-- React + Vite
-- Netlify hosting
-- Netlify `_redirects` proxies `/api/*` → backend
-
-**Backend**
-- Node.js + Express (Render)
-- Multer uploads for images/PDFs
-- Rate limiting middleware
-- Simple in-memory cache + job store + queue worker
-
-**AI / Inference**
-- Hugging Face Spaces (Gradio API for Detect + generation)
+**Phase 3 (6–12 months): Microservices**
+- Extract Detect/Generate/Resize/Convert into independent services
+- Central API gateway (routing + auth)
+- Container orchestration (Kubernetes)
+- Event-driven messaging between services
 
 ---
 
-## Local development
+## System design & architecture (what’s implemented)
 
-### Backend
-```bash
-cd backend
-npm install
-npm run dev
-```
+**Implemented patterns**
+- **Async job processing:** submit → jobId → status polling; worker handles long inference  
+- **Rate limiting:** protects public endpoints and controls cost exposure  
+- **TTL caching (detect):** speeds repeat requests and reduces HF calls (tradeoff: memory-only)  
+- **Stateless API:** no sessions; state is job-based (Redis planned)  
+- **Decoupled deployments:** Netlify UI + Render API deploy independently  
+- **Separation of concerns:** Routes → Services → Utils → Middleware  
 
-Create `backend/.env` (example — do not commit secrets):
-```env
-PORT=8080
-CORS_ORIGIN=http://localhost:5173
-HF_TOKEN=YOUR_TOKEN
+**Priority gaps (by value)**
+- **High:** persistent queue/storage, observability, retry/backoff, circuit breaker  
+- **Medium:** WebSockets, idempotency keys, dead-letter queue  
+- **Low:** API versioning, stronger validation, security headers  
 
-SPACE_ID=saradubey6/ai-image-detector
-GENERATE_SPACE_ID=saradubey6/prompt-to-image
-GENERATE_ENDPOINT=/generate
-```
-
-### Frontend
-```bash
-cd frontend
-npm install
-npm run dev
-```
+**Learning focus**  
+This project intentionally explores production patterns (async queues, caching, rate limiting) beyond what’s strictly required—serving as a sandbox for backend architecture experimentation under real-world free-tier constraints.
 
 ---
 
 ## Deployment notes
 
-### Backend (Render)
-- Root directory: `backend`
-- Build: `npm install`
-- Start: `node src/server.js`
-- Set env vars in Render dashboard (never commit tokens)
+**Frontend (Netlify)**
+- Uses `_redirects` to proxy `/api/*` → Render backend
 
-### Frontend (Netlify)
-- Base directory: `frontend`
-- Build: `npm run build`
-- Publish: `dist`
-- `frontend/public/_redirects`:
-  ```
-  /api/*  https://ai-image-detector-o6be.onrender.com/api/:splat  200
-  /*      /index.html  200
-  ```
+**Backend (Render)**
+- Express API gateway orchestrates HF Spaces + local media pipelines  
+- Secrets (HF tokens) must be stored in platform environment variables (never in Git)
 
 ---
 
 ## Security note
 
-Never commit tokens (HF_TOKEN) to GitHub. Use:
-- `.env` locally
-- Render Environment Variables in production
-
-If a token was committed, rotate it immediately in Hugging Face and remove it from Git history.
+Never commit tokens (HF_TOKEN) to GitHub. Rotate tokens immediately if exposed and remove them from Git history.
 
 ---
 
 ## Credits
 
-Designed and built by Sara Dubey —  2026, Virginia, USA.
+Designed and built by Sara Dubey —  (2026), Virginia, USA.
