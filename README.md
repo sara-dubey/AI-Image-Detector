@@ -151,11 +151,6 @@ This project intentionally explores production patterns (async queues, caching, 
 - Express API gateway orchestrates HF Spaces + local media pipelines  
 - Secrets (HF tokens) must be stored in platform environment variables (never in Git)
 
----
-
-## Security note
-
-Never commit tokens (HF_TOKEN) to GitHub. Rotate tokens immediately if exposed and remove them from Git history.
 
 ---
 
